@@ -123,6 +123,12 @@ def eval_policy(args, agent, steps, wandb=None):
         rewards += reward
         if done:
             print("Reward {}".format(rewards))
+            name = "Polciy_reward_{}".format(rewards)  
+            filename = os.path.join(run_name, name)
+            if not os.path.exists(filename):
+                os.makedirs(filename) 
+            torch.save(agent.critic.state_dict(), filename + "_critic")
+            torch.save(agent.actor.state_dict(), filename + "_actor")
             break
     # save video to wandb
     path = "videos/" + run_name + "/rl-video-episode-0.mp4"
