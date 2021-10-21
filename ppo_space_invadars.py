@@ -19,12 +19,14 @@ from stable_baselines3.common.atari_wrappers import (
 )
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
+from collections import deque
 
 def parse_args():
     # fmt: off
     parser = argparse.ArgumentParser()
     parser.add_argument('--exp-name', type=str, default=os.path.basename(__file__).rstrip(".py"),
+        help='the name of this experiment')
+    parser.add_argument('--wandb-name', type=str, default="test",
         help='the name of this experiment')
     parser.add_argument('--gym-id', type=str, default="SpaceInvaders-v0",
         help='the id of the gym environment')
@@ -32,7 +34,7 @@ def parse_args():
         help='the learning rate of the optimizer')
     parser.add_argument('--seed', type=int, default=1,
         help='seed of the experiment')
-    parser.add_argument('--total-timesteps', type=int, default=10000000,
+    parser.add_argument('--total-timesteps', type=int, default=100000000,
         help='total timesteps of the experiments')
     parser.add_argument('--torch-deterministic', type=lambda x:bool(strtobool(x)), default=True, nargs='?', const=True,
         help='if toggled, `torch.backends.cudnn.deterministic=False`')
@@ -92,12 +94,12 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
         if capture_video:
             if idx == 0:
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        env = NoopResetEnv(env, noop_max=30)
-        env = MaxAndSkipEnv(env, skip=4)
+        #env = NoopResetEnv(env, noop_max=1)
+        #env = MaxAndSkipEnv(env, skip=0)
         env = EpisodicLifeEnv(env)
         if "FIRE" in env.unwrapped.get_action_meanings():
             env = FireResetEnv(env)
-        env = ClipRewardEnv(env)
+        #env = ClipRewardEnv(env)
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayScaleObservation(env)
         env = gym.wrappers.FrameStack(env, 4)
@@ -110,11 +112,15 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
 
 
 def eval_policy(args, agent, steps, wandb=None):
-    run_name = f"{args.gym_id}__{args.exp_name}__{args.seed}__{int(steps)}"
-    env = make_env(args.gym_id, args.seed , 0, True, run_name)()          
+    run_name = f"{args.gym_id}__seed_{args.seed}__steps_{int(steps)}"
+    run_path = os.path.join(args.exp_name, run_name)
+    print("run_name ", run_path)
+    env = make_env(args.gym_id, args.seed , 0, True, run_path)()          
     obs = torch.Tensor(env.reset()).to(device).unsqueeze(0)
     rewards = 0
+    eps_steps = 0
     while True:
+        eps_steps += 1
         with torch.no_grad():
             action, logprob, _, value = agent.get_action_and_value(obs)
         action = action.cpu().numpy()[0]
@@ -122,17 +128,20 @@ def eval_policy(args, agent, steps, wandb=None):
         obs = torch.Tensor(obs).to(device).unsqueeze(0)
         rewards += reward
         if done:
-            print("Reward {}".format(rewards))
-            name = "Polciy_reward_{}".format(rewards)  
-            filename = os.path.join(run_name, name)
+            print("Reward {} steps {}".format(rewards, eps_steps))
+            if args.track:
+                wandb.log({"Reward": rewards, "episode steps": eps_steps})
+            name = "Polciy_reward_{}".format(rewards)
+
+            filename = os.path.join(run_path, name)
             if not os.path.exists(filename):
                 os.makedirs(filename) 
             torch.save(agent.critic.state_dict(), filename + "_critic")
             torch.save(agent.actor.state_dict(), filename + "_actor")
+            torch.save(agent.network.state_dict(), filename + "_network")
             break
     # save video to wandb
-    path = "videos/" + run_name + "/rl-video-episode-0.mp4"
-    print(path)
+    path = os.path.join("videos", args.exp_name, run_name, "rl-video-episode-0.mp4")
     if wandb is not None:
         wandb.log({"video": wandb.Video(path,fps=4,format="gif")})
 
@@ -183,7 +192,7 @@ if __name__ == "__main__":
             entity=args.wandb_entity,
             sync_tensorboard=True,
             config=vars(args),
-            name=run_name,
+            name=args.wandb_name,
             monitor_gym=True,
             save_code=True,
         )
@@ -225,6 +234,8 @@ if __name__ == "__main__":
     next_done = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
     steps = 0
+    scores_window = deque(maxlen=100) 
+    
     for update in range(1, num_updates + 1):
         # Annealing the rate if instructed to do so.
         if args.anneal_lr:
@@ -234,7 +245,7 @@ if __name__ == "__main__":
 
         for step in range(0, args.num_steps):
             steps += 1
-            if steps % 100 == 1:
+            if steps % 5000 == 1:
                 if args.track:
                     eval_policy(args, agent, steps, wandb)
                 else:
@@ -259,6 +270,10 @@ if __name__ == "__main__":
             for item in info:
                 if "episode" in item.keys():
                     print(f"global_step={global_step}, episodic_return={item['episode']['r']}")
+                    scores_window.append(item['episode']['r'])
+                    mean_reward = np.mean(np.array(scores_window))
+                    if args.track:
+                        wandb.log({"episodic_return": item['episode']['r'], "average_episodic_return": mean_reward})
                     writer.add_scalar("charts/episodic_return", item["episode"]["r"], global_step)
                     writer.add_scalar("charts/episodic_length", item["episode"]["l"], global_step)
                     break
