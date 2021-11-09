@@ -19,7 +19,7 @@ from stable_baselines3.common.atari_wrappers import (
 )
 from torch.distributions.categorical import Categorical
 from torch.utils.tensorboard import SummaryWriter
-
+from replayBuffer import ReplayBuffer
 
 def parse_args():
     # fmt: off
@@ -78,9 +78,12 @@ def parse_args():
         help='the maximum norm for the gradient clipping')
     parser.add_argument('--target-kl', type=float, default=None,
         help='the target KL divergence threshold')
-    
+    parser.add_argument('--buffer_size', type=int, default=10000,
+        help="path to expert policy weights")
     parser.add_argument('--filename', type=str, default=None,
         help="path to expert policy weights")
+    parser.add_argument('--size', type=int, default=84,
+        help="size of state")
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
     args.minibatch_size = int(args.batch_size // args.num_minibatches)
@@ -97,9 +100,9 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
                 env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
         #env = NoopResetEnv(env, noop_max=30)
         #env = MaxAndSkipEnv(env, skip=4)
-        env = EpisodicLifeEnv(env)
-        if "FIRE" in env.unwrapped.get_action_meanings():
-            env = FireResetEnv(env)
+        #env = EpisodicLifeEnv(env)
+        #if "FIRE" in env.unwrapped.get_action_meanings():
+        #    env = FireResetEnv(env)
         #env = ClipRewardEnv(env)
         env = gym.wrappers.ResizeObservation(env, (84, 84))
         env = gym.wrappers.GrayScaleObservation(env)
@@ -111,11 +114,13 @@ def make_env(gym_id, seed, idx, capture_video, run_name):
 
     return thunk
 
+
 def create_buffer(args, agent, replay_buffer):
     """ """
-    run_name = f"{args.gym_id}__{args.exp_name}__{0}__{int(steps)}"
+    run_name = f"{args.gym_id}__{args.exp_name}"
     env = make_env(args.gym_id, 0 , 0, False, run_name)()
     old_buffer_size = 0
+    average_return = []
     while True:
         obs = torch.Tensor(env.reset()).to(device).unsqueeze(0)
         rewards = 0
@@ -125,20 +130,24 @@ def create_buffer(args, agent, replay_buffer):
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(obs)
             action = action.cpu().numpy()[0]
-            obs, reward, done, info = env.step(action)
-            replay_buffer.add(obs, action, reward, done)
-            obs = torch.Tensor(obs).to(device).unsqueeze(0)
+            next_obs, reward, done, info = env.step(action)
+            next_obs = torch.Tensor(next_obs).to(device).unsqueeze(0)
+            replay_buffer.add(obs.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), action, np.array(reward), np.array(done))
+            obs = next_obs
             rewards += reward
             if replay_buffer.idx >= args.buffer_size:
                 print("Save Buffer with size of {}".format(replay_buffer.idx))
-                replay_buffer.
+                replay_buffer.save_memory("expert_data_space_invadars_average_reward_{:.2f}_size_{}".format(mean_reward, replay_buffer.idx))
+                return
             if done:
+                mean_reward = np.mean(average_return)
                 if rewards > 1000:
                     print("Add traj to buffer with a size of {} ".format(replay_buffer.idx))
+                    average_return.append(rewards)
+                    old_buffer_size = replay_buffer.idx
                 else:
                     print("to low reward do not add")
-                    old_buffer_size = replay_buffer.idx
-            average_return.append(rewards)
+                    replay_buffer.idx = old_buffer_size
                 print("Reward {} steps {}".format(rewards, steps))
                 break
 
@@ -211,7 +220,8 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     torch.backends.cudnn.deterministic = args.torch_deterministic
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    replay_buffer = ReplayBuffer((size, size, 3), args.buffer_size + 1, device)
+    action_space = (1,)
+    replay_buffer = ReplayBuffer((4, args.size, args.size), action_space, args.buffer_size + 1, device)
     envs = gym.vector.SyncVectorEnv(
             [make_env(args.gym_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
             )
