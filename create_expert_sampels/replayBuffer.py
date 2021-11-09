@@ -29,8 +29,8 @@ class ReplayBuffer(object):
         np.copyto(self.obses[self.idx], obs.astype(np.uint8))
         np.copyto(self.next_obses[self.idx], next_obses.astype(np.uint8))
         np.copyto(self.actions[self.idx], action.astype(np.uint8))
-        np.copyto(self.rewards[self.idx], reward.astype(np.float32))
-        np.copyto(self.dones[self.idx], done.astype(np.bool))
+        np.copyto(self.rewards[self.idx], np.float32(reward))
+        np.copyto(self.dones[self.idx], np.bool(done))
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.full or self.idx == 0
 
@@ -92,7 +92,7 @@ class ReplayBuffer(object):
         with open(filename + '/rewards.npy', 'rb') as f:
             self.rewards = np.load(f)
 
-        with open(filename + '/obses.npy', 'rb') as f:
+        with open(filename + '/dones.npy', 'rb') as f:
             self.dones = np.load(f)
   
         with open(filename + '/index.txt', 'r') as f:
