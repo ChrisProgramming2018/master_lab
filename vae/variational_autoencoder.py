@@ -1,5 +1,6 @@
 import os
 import sys
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -7,11 +8,14 @@ import torchvision.transforms as transforms
 from replayBuffer import ReplayBuffer
 import argparse
 import numpy as np
-import wandb
 from vae_model import VariationalAutoencoder, vae_loss
 import datetime
+import wandb
     
-def main(args):
+def main(args, wandb):
+    print(type(wandb))
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     latent_dims = args.latent_dims
     num_epochs = args.updates
     batch_size = args.batch_size
@@ -27,18 +31,7 @@ def main(args):
     replay_buffer_eval.load_memory(args.bufferpath_eval)
     
     optimizer = torch.optim.Adam(params=vae.parameters(), lr=learning_rate, weight_decay=1e-5)
-    vae.train()
     train_loss_avg = []
-    if args.track:
-         wandb.init(
-                 project=args.wandb_project_name,
-                 entity=args.wandb_entity,
-                 sync_tensorboard=True,
-                 config=vars(args),
-                 name=args.run_name,
-                 monitor_gym=True,
-                 save_code=True,
-        )
     dt = datetime.datetime.today().strftime("%Y-%m-%d")
     now = datetime.datetime.now()
     time = str(now.hour) +"-" + str(now.minute) + "-" + str(now.second)
@@ -67,11 +60,16 @@ def main(args):
         loss.backward()
         # one step of the optmizer (using the gradients from backpropagation)
         optimizer.step()
-        train_loss_avg.append(loss.item())
+        loss_train = loss.item()
+        train_loss_avg.append(loss_train)
         if epoch % 100 == 0:
-            print('Epoch [%d / %d] average reconstruction error: %f' % (epoch+1, num_epochs, np.mean(train_loss_avg)))
-            filename = experiment_path + "/model_at_{}-loss{:.2f}".format(epoch, loss.item())
-            vae.save_var(filename)
+            train_loss_mean = np.mean(train_loss_avg)
+            print('Epoch [%d / %d] average reconstruction error: %f' % (epoch+1, num_epochs, loss_train))
+            #filename = experiment_path + "/model_at_{}-loss{:.2f}".format(epoch, loss_train)
+            #vae.save_var(filename)
+            log_image(wandb, replay_buffer_eval.obses[0], vae, epoch)
+            if args.track:
+                wandb.log({"train loss": loss_train, "train loss mean" : train_loss_mean })
         if epoch % 250 == 0 or False:
             vae.eval()
             obses_eval, next_obses, actions, rewards, dones = replay_buffer_eval.sample(batch_size)
@@ -83,8 +81,35 @@ def main(args):
             image_eval_recon, latent_mu_eval, latent_logvar_eval = vae(image_eval.detach())
             vae.train()
             loss_eval = vae_loss(image_eval_recon, image_eval, latent_mu_eval, latent_logvar_eval)
-            print('Epoch [%d / %d] eval reconstruction error: %f' % (epoch+1, num_epochs, loss_eval.item()))
+            eval_loss = loss_eval.item()
+            if args.track:
+                wandb.log({"eval loss": eval_loss})
+                log_image(wandb, replay_buffer_eval.obses[0], vae, epoch)
+            print('Epoch [%d / %d] eval reconstruction error: %f' % (epoch+1, num_epochs, eval_loss ))
 
+
+def log_image(w, images, vae, steps):
+    img = images[0]
+    img = torch.as_tensor(img, device=args.device).float()
+    img = img.unsqueeze(0)
+    img = img.unsqueeze(0)
+    vae.eval()
+    image_recon, latent_mu, latent_logvar = vae(img.detach())
+    vae.train()
+    recon_image = image_recon.detach().cpu().squeeze(0).squeeze(0).numpy() * 255
+    img = img.detach().cpu().squeeze(0).squeeze(0).numpy()
+    verti = np.concatenate((img, recon_image), axis=0).astype(int)
+    # verti = np.expand_dims(verti,0)
+    # print(verti.shape)
+    # print(verti.dtype)
+    #cv2.imshow('VERTICAL', verti)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+    path = "images"
+    name= os.path.join(path, "image_step-{}.jpg".format(steps))
+    cv2.imwrite(name, verti)
+    w.log({"recon image": wandb.Image(verti)})
+    return vae
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -102,5 +127,15 @@ if __name__ == "__main__":
     parser.add_argument('--updates', type=int, default=20000, help='amount of samples buffer can store')
     parser.add_argument('--track', type=bool, default=False, help='activate wandb')
     parser.add_argument('--run_name', type=str, default="test", help='run name')
+    parser.add_argument('--seed', type=int, default=1, help='seed ')
     args = parser.parse_args()
-    main(args)
+    if args.track:
+        wandb.init(
+                project="master_lab",
+                sync_tensorboard=True,
+                config=vars(args),
+                name=args.run_name,
+                monitor_gym=True,
+                save_code=True,
+                )
+    main(args, wandb)
