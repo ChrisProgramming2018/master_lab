@@ -1,0 +1,5 @@
+model:
+  learning_rate: 3e-5
+  capacity: 64
+  latent_dims: 2
+  batch_size: 32
