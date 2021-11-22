@@ -30,6 +30,7 @@ def time_format(sec):
 
 def main(args):
     """ """
+    path_img = args.path
     t0 = time.time()
     TASKONOMY_PRETRAINED_WEIGHT_FILES= ["autoencoding_decoder-a4a006b5a8b314b9b0ae815c12cf80e4c5f2e6c703abdf65a64a020d3fef7941.pth", "autoencoding_encoder-e35146c09253720e97c0a7f8ee4e896ac931f5faa1449df003d81e6089ac6307.pth"]
     path_de = 'https://github.com/alexsax/visual-prior/raw/networks/assets/pytorch/' + str(TASKONOMY_PRETRAINED_WEIGHT_FILES[0])
@@ -47,7 +48,7 @@ def main(args):
         
     model.to(args.device)
     model.train()
-    lr = 3e-4
+    lr = 1e-4
     optimizer = optim.Adam(model.parameters(), lr=lr)
     
     now = datetime.now()    
@@ -64,7 +65,7 @@ def main(args):
     memory.load_memory(path)
     print("... buffer size {} loaded".format(memory.idx))
     
-    path = "vaild-buffer"
+    path = "valid-buffer"
     print("Load valid buffer ...")
     memory_valid.load_memory(path)
     print("... valid buffer {} loaded".format(memory_valid.idx))
@@ -73,7 +74,7 @@ def main(args):
     print("buffer size valid ", memory_valid.idx)
     
     torch.cuda.empty_cache()
-    batch_size = 32
+    batch_size = 48
     scores_window = deque(maxlen=100) 
     epochs = int(100e4)
     for epoch in range(epochs):
@@ -99,8 +100,7 @@ def main(args):
                 x_recon = model(rgb_batch.to(args.device)).detach()
                 loss = F.mse_loss(x_recon, rgb_batch.to(args.device))
                 eval_loss +=loss
-                eval_loss = eval_loss / evaL_size
-            model.save_model(model_path + "/model_step_{}_eval_loss_{:.10f}".format(epoch, eval_loss))
+
             model.train()
             text = "Eval model {} eval loss {:10f} time {}  \r".format(epoch, eval_loss, time_format(time.time() - t0))
             writer.add_scalar('eval_loss', eval_loss, epoch)  
@@ -110,6 +110,25 @@ def main(args):
             text = "Epochs {}  loss {:.5f}  ave loss {:.5f}  time {}  \r".format(epoch, loss, mean_loss, time_format(time.time() - t0))
             print("  ")
             print(text)
+            img = memory_valid.obses[0]
+            # import pdb; pdb.set_trace()
+            im = Image.fromarray(img)
+            if not os.path.exists(path_img):
+                os.makedirs(path_img)
+            im.save(path_img + "/orginal-{}.jpeg".format(epoch))
+            print("im ", img.shape)
+            obs = torch.as_tensor(img, device=args.device).float().unsqueeze(0)
+            obs = torch.reshape(obs,(1, 3, 256, 256))
+            #import pdb; pdb.set_trace()
+            x_recon_s = model(obs.to(args.device)).detach().squeeze(0) * 255
+            x_recon_s = x_recon_s.type(torch.int).cpu().numpy()
+            #import pdb; pdb.set_trace()
+            x_recon_s = np.moveaxis(x_recon_s, 0, -1)
+            x_recon_s = x_recon_s.astype(np.uint8)
+            # import pdb; pdb.set_trace()
+            re = Image.fromarray(x_recon_s)
+            re.save(path_img + "/reconst-{}.jpeg".format(epoch))
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -119,6 +138,8 @@ def parse_args():
             help='size of saved buffer')
     parser.add_argument('--device', type=str, default="cpu",
             help='select device')
+    parser.add_argument('--path', type=str, default="test",
+            help='path to save experiment data')
     args = parser.parse_args()
     return args
 
