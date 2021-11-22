@@ -1,0 +1,8 @@
+#vim
+*.swp
+*.swo
+
+#weights
+*actor
+*critic
+*network
