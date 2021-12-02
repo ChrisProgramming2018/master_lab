@@ -1,10 +1,10 @@
 import os
 import sys
-import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
+import torch.optim as optim
 from replayBuffer import ReplayBuffer
 import argparse
 import numpy as np
@@ -38,7 +38,7 @@ def main(args, wandb):
 
     feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
     
-    img_path="/home/programmer/master_1/lab/transformer_hugging_face/coco_images/test2017/*"
+    img_path="/home/leiningc/master_lab/master_lab/vae/small_test/*"
     from os import listdir
     from os.path import isfile, join
     import glob
@@ -80,13 +80,17 @@ def main(args, wandb):
             decoder_dim = 512,      # paper showed good results with just 512
             decoder_depth = 6       # anywhere from 1 to 8
             ).to("cuda")
+    learning_rate = 5e-4
+    optimizer = optim.Adam(mae.parameters(), lr=learning_rate, eps=1e-5)
     train_loss_avg = []
     for progress in range(10000):
         #sys.stdout.write("Download progress: %d%%   \r" % (progress) )
         #sys.stdout.flush()
         # import pdb; pdb.set_trace()
+        optimizer.zero_grad()
         loss = mae(batch)
         loss.backward()
+        optimizer.step()
         train_loss_avg.append(loss.cpu().detach().numpy())
         if progress % 100 == 0:
             print("at {}av loss {} ".format(progress, np.mean(train_loss_avg)))
