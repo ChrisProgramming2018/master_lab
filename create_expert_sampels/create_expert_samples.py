@@ -3,7 +3,7 @@ import os
 import random
 import time
 from distutils.util import strtobool
-
+import sys
 import gym
 from gym import wrappers
 import numpy as np
@@ -82,7 +82,7 @@ def parse_args():
         help="path to expert policy weights")
     parser.add_argument('--filename', type=str, default=None,
         help="path to expert policy weights")
-    parser.add_argument('--size', type=int, default=84,
+    parser.add_argument('--size', type=int, default=160,
         help="size of state")
     args = parser.parse_args()
     args.batch_size = int(args.num_envs * args.num_steps)
@@ -121,10 +121,12 @@ def create_buffer(args, agent, replay_buffer):
     env = make_env(args.gym_id, 0 , 0, False, run_name)()
     old_buffer_size = 0
     average_return = []
+    env.unwrapped._render_mode = "rgb_array"
     while True:
         obs = torch.Tensor(env.reset()).to(device).unsqueeze(0)
         rewards = 0
         steps = 0
+        save_obs = None
         while True:
             steps += 1
             with torch.no_grad():
@@ -132,7 +134,13 @@ def create_buffer(args, agent, replay_buffer):
             action = action.cpu().numpy()[0]
             next_obs, reward, done, info = env.step(action)
             next_obs = torch.Tensor(next_obs).to(device).unsqueeze(0)
-            replay_buffer.add(obs.detach().cpu().numpy(), next_obs.detach().cpu().numpy(), action, np.array(reward), np.array(done))
+            if save_obs is None:
+                save_obs = np.resize( info["rgb"],(160,160,3))
+            else:
+                save_obs = save_next_obs
+            save_next_obs = np.resize( info["rgb"],(160,160,3))
+            #import pdb; pdb.set_trace()
+            replay_buffer.add(save_obs, save_next_obs, action, np.array(reward), np.array(done))
             obs = next_obs
             rewards += reward
             if replay_buffer.idx >= args.buffer_size:
@@ -153,28 +161,6 @@ def create_buffer(args, agent, replay_buffer):
 
 
 
-def eval_policy(args, agent, steps):
-    runs = 10
-    average_return = []
-    run_name = f"{args.gym_id}__{args.exp_name}__{0}__{int(steps)}"
-    env = make_env(args.gym_id, 0 , 0, True, run_name)()
-    for i in range(runs):
-        obs = torch.Tensor(env.reset()).to(device).unsqueeze(0)
-        rewards = 0
-        steps = 0
-        while True:
-            steps += 1
-            with torch.no_grad():
-                action, logprob, _, value = agent.get_action_and_value(obs)
-            action = action.cpu().numpy()[0]
-            obs, reward, done, info = env.step(action)
-            obs = torch.Tensor(obs).to(device).unsqueeze(0)
-            rewards += reward
-            if done:
-                average_return.append(rewards)
-                print("Reward {} steps {}".format(rewards, steps))
-                break
-    print("Average return {} over {} runs".format(np.mean(average_return), runs))
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     torch.nn.init.orthogonal_(layer.weight, std)
@@ -221,7 +207,7 @@ if __name__ == "__main__":
     torch.backends.cudnn.deterministic = args.torch_deterministic
     device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
     action_space = (1,)
-    replay_buffer = ReplayBuffer((4, args.size, args.size), action_space, args.buffer_size + 1, device)
+    replay_buffer = ReplayBuffer((args.size, args.size,3), action_space, args.buffer_size + 1, device)
     envs = gym.vector.SyncVectorEnv(
             [make_env(args.gym_id, args.seed + i, i, args.capture_video, run_name) for i in range(args.num_envs)]
             )
