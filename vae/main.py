@@ -10,7 +10,9 @@ import argparse
 import numpy as np
 import datetime
 import wandb
-    
+import torch
+from vit_pytorch import ViT, MAE
+
 def main(args, wandb):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -21,13 +23,77 @@ def main(args, wandb):
     learning_rate = args.lr
     variational_beta = 1
     use_gpu = True
-    
+    """
     replay_buffer = ReplayBuffer((4, args.size, args.size), (args.action_shape, ), args.buffer_size + 1, args.device)
     replay_buffer.load_memory(args.bufferpath_train)
     
     replay_buffer_eval = ReplayBuffer((4, args.size, args.size), (args.action_shape, ), args.buffer_size_eval + 1, args.device)
     replay_buffer_eval.load_memory(args.bufferpath_eval)
+    """
+    from transformers import ViTFeatureExtractor, ViTForImageClassification
+    from PIL import Image
+    import requests
+    from PIL import Image
+    from torchvision.transforms import ToTensor
+
+    feature_extractor = ViTFeatureExtractor.from_pretrained('google/vit-base-patch16-224')
     
+    img_path="/home/programmer/master_1/lab/transformer_hugging_face/coco_images/test2017/*"
+    from os import listdir
+    from os.path import isfile, join
+    import glob
+    names = []
+    for idx, files in enumerate(glob.glob(img_path)):
+        #print(files)
+        names.append(files)
+        if idx > 32:
+            break
+
+
+
+    batch = []
+    for n in names:
+        #print(n)
+        image = Image.open(n)
+        #import pdb; pdb.set_trace()
+        #print(image)
+        if image.mode == "RGB":
+            inputs = feature_extractor(images=image, return_tensors="pt")
+            data = inputs["pixel_values"].to("cuda")
+            #print(data.shape)
+            batch.append(data.squeeze(0))
+    print(len(batch))
+    batch = torch.stack(batch)
+    print(batch.shape)
+    v = ViT(
+            image_size = 224,
+            patch_size = 32,
+            num_classes = 1000,
+            dim = 1024,
+            depth = 6,
+            heads = 8,
+            mlp_dim = 2048
+            )
+    mae = MAE(
+            encoder = v,
+            masking_ratio = 0.75,   # the paper recommended 75% masked patches
+            decoder_dim = 512,      # paper showed good results with just 512
+            decoder_depth = 6       # anywhere from 1 to 8
+            ).to("cuda")
+    train_loss_avg = []
+    for progress in range(10000):
+        #sys.stdout.write("Download progress: %d%%   \r" % (progress) )
+        #sys.stdout.flush()
+        # import pdb; pdb.set_trace()
+        loss = mae(batch)
+        loss.backward()
+        train_loss_avg.append(loss.cpu().detach().numpy())
+        if progress % 100 == 0:
+            print("at {}av loss {} ".format(progress, np.mean(train_loss_avg)))
+    
+    sys.exit()
+    torch.save(v.state_dict(), './trained-vit.pt')
+
     train_loss_avg = []
     dt = datetime.datetime.today().strftime("%Y-%m-%d")
     now = datetime.datetime.now()
